@@ -13,6 +13,10 @@ See "Esp32WebConfig.h" for notes on library usage
 #include "ArrayList.h"
 //#include<array>
 
+
+// The base object for each HtmlItem is "HtmlItemBase".  The VarableType tells the functions which 
+//loop through all of the HTML items how to cast the item and how to handle the data which is stored
+//in a particular item.
 enum VariableType {
     INT,
     FLOAT,
@@ -28,21 +32,41 @@ typedef std::function<void()> dynamicUpdataCb;
 static void placeholderForCb() {}
 
 class  HtmlItemBase {
+    
 public:
+
+    bool isDisabled = false;
+    bool submitOnChangeVal = false;
+    bool isVisible = true;
+    
+
     String label = "";
     VariableType type;
     static int pos;
     int id;
+
+    //HTML labels cannot contain spaces or strange characters, so get rid of all of the fluff
+    //and also add a number to the end of the item to guarantee that it is unique
     String htmlFriendlyLabel = "";
     static HtmlItemBase* lastaddedItem;
     String htmlPageSource = "";
-    static bool isGrouping;
-    bool isGroup = false;
-    String extraParams1 = "";
-    String extraParams2 = "";
+    String userAttributes = "";
 
+
+    // the "grouping" is done with HTML "fieldset" items
+    //i f a fieldset is disabled then all items in the fielset are also disabled
+    //some items such as checkboxes need to know if they are disabled in this manner
+    //so that they can tell if their value wasn't submitted due to it being disabled or
+    //due to the checkbox not being checked
+    static int groupingLayers;
+    static int topmostDisabledGroup;
+ 
     static dynamicUpdataCb dynUpdataCb;
 
+
+    //this function is called before the html page is created
+    //and allows the upper levels to dynamically update things such as 
+    //checked checked, visibility, etc
     static void setDynamicUpdataCb(dynamicUpdataCb dynUpdataCb1){
             dynUpdataCb = dynUpdataCb1;
     }
@@ -58,36 +82,76 @@ public:
         if (htmlFriendlyLabel == "") htmlFriendlyLabel = "def";
         htmlFriendlyLabel += String(id);
         lastaddedItem = this;
-        isGroup = isGrouping;
     }
     static void reset(){
-        isGrouping = false;
+        groupingLayers = 0;
+        topmostDisabledGroup = 0;
     }
     virtual String getHtmlItemText() = 0;
+
+
+    // attributes can manually be specified when the item is created (or adjusted dynamically in the variable "userAttributes"
+    //other attributes are set based on whether the HTML item has been disabled or causes a subbmittal upon change, etc
+    virtual String getAttributeStr() {
+        String str = userAttributes + (isDisabled?" disabled ":"") + " " + (submitOnChangeVal?R"( onchange = 'this.form.submit()' )":"");
+         return str;
+    }
+
+
+    //the higher level classes call this base funtion to replace certain tags which are
+    //created in the HTML description of this item
+    virtual String replaceInHtml(String& HtmlStr) {
+        HtmlStr.replace("%label", label);
+        String s1 = htmlFriendlyLabel;
+        HtmlStr.replace("%tag", s1 );
+        HtmlStr.replace("%attr", getAttributeStr() );
+        return HtmlStr;
+    }
+
+    void disabled(bool checked = true) {
+        isDisabled = checked;
+    }
+
+    void submitOnChange(bool checked = true) {
+        submitOnChangeVal = checked;
+    }
+
+    void visible(bool checked = true) {
+        isVisible = checked;
+    }
 };
 
 
     
-
-class HtmlItem_Group : public HtmlItemBase {
+//if label == "" then this object signifies the end of the grouping
+// the fieldset is an HTML item which draws a group box around a set of related items
+//note that the attributes of the contained items reflects the checked of the field set item
+//for example if the fieldset is disabled then all items contained within that fieldset are also disabled.
+class HtmlItem_FieldSet : public HtmlItemBase {
 public:
-    HtmlItem_Group(String label1) :HtmlItemBase(label1) {
+    HtmlItem_FieldSet(String label1) :HtmlItemBase(label1) {
         type = VariableType::GROUP;
     }
     virtual String getHtmlItemText() {
+        if (!isVisible) return "";
         String str;
-        if (isGrouping) {
-            str += "</fieldset>\n\r";
+        if (label != "") {
+            str = "<fieldset %attr>\n\r";
+            str += "<legend>" + label + "</legend>\n\r";
+            groupingLayers += 1;
+            if (isDisabled && topmostDisabledGroup == 0) topmostDisabledGroup = groupingLayers;
         }
-
-            str += "<fieldset>\n\r";
-            str  += "<legend>" + label + "</legend>\n\r";
-            isGrouping = true;
-
-       return str;
+        else {
+            str = "</fieldset>\n\r";
+            if (groupingLayers == topmostDisabledGroup) topmostDisabledGroup = 0;
+            if( groupingLayers > 0) groupingLayers -= 1;
+        }
+       return replaceInHtml(str);
     }
 };
 
+
+//A simple text HTML item
 class HtmlItem_Note : public HtmlItemBase {
 public:
     HtmlItem_Note(String label1) :HtmlItemBase(label1) {
@@ -95,7 +159,8 @@ public:
     }
 
     virtual String getHtmlItemText() {
-        String str = String("<p>") + label + "</p>";
+        if (!isVisible) return "";
+        String str = String("<p>") + label + "</p>\r\n";
         return str;
     }
 
@@ -107,7 +172,7 @@ public:
     }
 };
 
-
+//A text box type of HTML item which stores this string in the dataStr variable
 class HtmlItem_String : public HtmlItemBase {
 public:
     String dataStr;
@@ -116,20 +181,15 @@ public:
         type = VariableType::STRING;
         dataStr = defaultVal01;
         defaultStr = defaultVal01;
-        extraParams1 = extraParams01;
+        userAttributes = extraParams01;
     }
 
     virtual String getHtmlItemText() {
-        String str = R"(<label for = '%l'>%l2 </label>
-      <input type = 'text' id = '%l' name = '%l' value = '%d' %ep1><br>
+        if (!isVisible) return "";
+        String str = R"(<label for = '%tag'>%label </label>
+      <input type = 'text' id = '%tag' name = '%tag' value = '%value' %attr><br>
 )";
-        str.replace("%l2", label);
-        String s1 = htmlFriendlyLabel;
-        str.replace("%l", s1 );
-        str.replace("%d", dataStr);
-        str.replace("%ep1", extraParams1);
-        //str.replace("%ep2", extraParams2);
-        return str;
+        return replaceInHtml(str);
     }
 
     String& getValue() { return dataStr; }
@@ -140,28 +200,30 @@ public:
         return dataStr;
     }
 
+    virtual String replaceInHtml(String& HtmlStr) {
+        HtmlItemBase::replaceInHtml(HtmlStr);
+        HtmlStr.replace("%value", dataStr);
+        return HtmlStr;
+    }
+
 };
 
+//A specialized HTML text box which only accepts an ip addess and stores this in an IPAddess variable
 class HtmlItem_IpAddr : public HtmlItemBase {
 public:
     IPAddress ip;
     HtmlItem_IpAddr(String label1, String defaultVal1, String extraParams01 = "") : HtmlItemBase(label1){
         type = VariableType::IP;
         ip.fromString(defaultVal1);
-        extraParams1 = extraParams01;
+        userAttributes = extraParams01;
     };
 
     virtual String getHtmlItemText() {
-        String str = R"(<label for = '%l'>%l2 </label>
-      <input type = 'text' id = '%l' name = '%l' value = '%d' %ep1 pattern='^((\d{1,2}|1\d\d|2[0-4]\d|25[0-5])\.){3}(\d{1,2}|1\d\d|2[0-4]\d|25[0-5])$'><br>
+        if (!isVisible) return "";
+        String str = R"(<label for = '%tag'>%label </label>
+      <input type = 'text' id = '%tag' name = '%tag' value = '%value' %attr pattern='^((\d{1,2}|1\d\d|2[0-4]\d|25[0-5])\.){3}(\d{1,2}|1\d\d|2[0-4]\d|25[0-5])$'><br>
 )";
-        str.replace("%l2", label);
-        String s1 = htmlFriendlyLabel;
-        str.replace("%l", s1);
-        str.replace("%d", toString());
-        str.replace("%ep1", extraParams1);
-        str.replace("%ep2", extraParams2);
-        return str;
+        return replaceInHtml(str);
     }
 
     String toString() {
@@ -176,14 +238,20 @@ public:
         return ip;
     }
 
+    virtual String replaceInHtml(String& HtmlStr) {
+        HtmlItemBase::replaceInHtml(HtmlStr);
+        HtmlStr.replace("%value", ip.toString());
+        return HtmlStr;
+    }
+
 };
 
+//A HTML number textbox which stores this string in the dataInt variable
 class HtmlItem_Int : public HtmlItemBase {
 public:
     int dataInt;
     int defaultInt;
     int min, max;
-    //bool isGrouping = false;
 
     HtmlItem_Int(String label1, int defaultVal1, int min1, int max1, String extraParams01 = "") : HtmlItemBase(label1) {
         min = min1;
@@ -191,21 +259,16 @@ public:
         type = VariableType::INT;
         dataInt = defaultVal1;
         defaultInt = defaultVal1;
-        extraParams1 = extraParams01;
+        userAttributes = extraParams01;
     }
 
     virtual String getHtmlItemText() {
-        String str = R"(<label for = '%l'>%l2 </label><br>
-      <input type = 'number' id = '%l' name = '%l' value = '%d'  min='%min' max='%max'><br>
+        if (!isVisible) return "";
+        String str = R"(<label for = '%tag'>%label </label><br>
+      <input type = 'number' id = '%tag' name = '%tag' value = '%value'  %attr'><br>
 )";
 
-        str.replace("%l2", label);
-        String s1 = htmlFriendlyLabel;
-        str.replace("%l", s1);
-        str.replace("%d", String(dataInt));
-        str.replace("%min", String(min));
-        str.replace("%max", String(max));
-        return str;
+        return replaceInHtml(str);
     }
 
     int& getValue() { return dataInt; }
@@ -215,31 +278,38 @@ public:
     int& operator()(void) {
         return dataInt;
     }
+
+    virtual String getAttributeStr() {
+        String str = HtmlItemBase::getAttributeStr() + " min=" + min + " max=" + max;
+        return str;
+    }
+
+    virtual String replaceInHtml(String& HtmlStr) {
+        HtmlItemBase::replaceInHtml(HtmlStr);
+        HtmlStr.replace("%value", String(dataInt));
+        return HtmlStr;
+    }
 };
 
+//A HTML selection textbox which requires the user to select from a list of item.  The index of the item is
+// stored in the "selectedItem" variable.  Note that a C++ Arraylist object is used and the header file
+//for this dependancy must be included
 class HtmlItem_Selection : public HtmlItemBase {
 public:
     ArrayList<String> elements;
     int selectedItem = 0;
 
-
-    /*
-    HtmlItem_Selection() :HtmlItemBase("Debug") {
-    type = VariableType::SELECT;
-    }  //debug
-    */
-
     HtmlItem_Selection(String label1, ArrayList<String>& elements1 ,  String extraParams01 = "") :HtmlItemBase(label1) {
         type = VariableType::SELECT;
-        extraParams1 = extraParams01;
+        userAttributes = extraParams01;
         elements = elements1;
     }
 
     virtual String getHtmlItemText() {
-        String str = R"(<label for = '%l'>%l2</label>
-<select id = '%l' name = '%l'>)";
-
-
+        if (!isVisible) return "";
+        String str = R"(<label for = '%tag'>%label</label>
+<select id = '%tag' name = '%tag'>
+)";
 
         String selStr = "";
 
@@ -250,11 +320,8 @@ public:
             }
 
             
-        str += "</select>";
-        str.replace("%l2", label);
-        String s1 = htmlFriendlyLabel;
-        str.replace("%l", s1);
-        return str;
+        str += "</select><br>\r\n";
+        return replaceInHtml(str);
     }
 
     int getPos(String label) {
@@ -289,44 +356,43 @@ public:
     }
 };
 
+//An HTML CheckBox item. The value of the checkbox is stored in the "checked" variable
 class HtmlItem_CheckBox : public HtmlItemBase {
 public:
-    bool state;
+    bool checked;
     bool defaultVal = false;
+    bool isInDisabledFieldset = false;
 
     HtmlItem_CheckBox(String label1, bool defaultVal1, String extraParams01 = "") : HtmlItemBase(label1) {
 
         type = VariableType::CHECK_BOX;
-        state = defaultVal1;
+        checked = defaultVal1;
         defaultVal = defaultVal1;
-        extraParams1 = extraParams01;
+        userAttributes = extraParams01;
     }
 
     virtual String getHtmlItemText() {
-
-        /*
-        String str = R"(<label for = '%l'>%l2 </label><br>
-      <input type = 'number' id = '%l' name = '%l' value = '%d'  min='%min' max='%max'><br>
+        if (!isVisible) return "";
+        isInDisabledFieldset = (topmostDisabledGroup != 0);
+        String str = R"(<input type='checkbox' id='%tag' name='%tag' value='checked' %attr>
+  <label for='%tag'>%label</label><br>
 )";
-*/
-
-        String str = R"(<input type='checkbox' %s id='%l' name='%l' value='State'>
-  <label for='%l'>%l2</label><br>
-)";
-        if (state)  str.replace("%s", "checked" );
-        else str.replace("%s", "" );
-        str.replace("%l2", label);
-        String s1 = htmlFriendlyLabel;
-        str.replace("%l", s1);
-        return str;
+        str = replaceInHtml(str);
+         //if(submitOnChangeVal) Serial.println(String("pt1 ") + str);
+         return str;
     }
 
-    bool& getValue() { return state; }
+    bool& getValue() { return checked; }
 
-    void setValue(bool i ) { state = i;}
+    void setValue(bool i ) { checked = i;}
 
     bool& operator()(void) {
-        return state;
+        return checked;
+    }
+    virtual String getAttributeStr() {
+        String str = HtmlItemBase::getAttributeStr();
+        str += checked?" checked ":"";
+        return str;
     }
 };
 

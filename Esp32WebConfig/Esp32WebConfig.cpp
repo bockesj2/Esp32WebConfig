@@ -1,8 +1,9 @@
+/*
+See "Esp32WebConfig.h" for notes on library usage
+*/
 #include "Esp32WebConfig.h"
 
 HtmlItemBase** Esp32WebConfig::configData = NULL;
-
-
 int Esp32WebConfig::configCount = 0;
 WebServer  Esp32WebConfig::Esp32WebConfigServer(80);
 Preferences Esp32WebConfig::prefs;
@@ -15,15 +16,15 @@ HtmlItemBase* Esp32WebConfig::addHtmlItem(HtmlItemBase* item) {
     return item;
 }
 
-
-
-void Esp32WebConfig::groupStart(String label) {
+HtmlItem_FieldSet* Esp32WebConfig::addFieldSet(String label) {
     if (label == "") label = "******";
-    addHtmlItem(new HtmlItem_Group(label));
+    HtmlItem_FieldSet* s1 = new HtmlItem_FieldSet(label);
+     addHtmlItem(s1);
+    return s1;
 }
 
-void Esp32WebConfig::groupEnd() {
-    HtmlItemBase::isGrouping = false;
+void Esp32WebConfig::fieldSetEnd() {
+    addHtmlItem(new HtmlItem_FieldSet(""));
 }
 
 HtmlItem_Note* Esp32WebConfig::addNote(String label) {
@@ -66,7 +67,73 @@ HtmlItem_CheckBox* Esp32WebConfig::addCheckBox(String label, bool defaultvalue, 
     return s1;
 }
 
+String Esp32WebConfig::getJsonConfig() {
+    JsonDocument doc;
 
+    for (int i = 0; i < configCount; i++) {
+ 
+        if (configData[i]->type == VariableType::STRING) {
+            HtmlItem_String* v1 = (HtmlItem_String*)configData[i]; 
+            doc[v1->label] = v1->dataStr;
+        }
+        if (configData[i]->type == VariableType::IP) {
+            HtmlItem_IpAddr* v1 = (HtmlItem_IpAddr*)configData[i];
+            doc[v1->label] = v1->ip.toString();
+        }
+        if (configData[i]->type == VariableType::INT) {
+            HtmlItem_Int* v1 = (HtmlItem_Int*)configData[i];
+            doc[v1->label] = v1->dataInt;
+        }
+        if (configData[i]->type == VariableType::SELECT) {
+            HtmlItem_Selection* v1 = (HtmlItem_Selection*)configData[i];
+            doc[v1->label] = v1->selectedItem;
+        }
+         if (configData[i]->type == VariableType::CHECK_BOX) {
+            HtmlItem_CheckBox* v1 = (HtmlItem_CheckBox*)configData[i]; 
+            doc[v1->label] = v1->checked;
+        }
+    }
+	String tmp = "";
+	serializeJson(doc, tmp);
+	return tmp;
+}
+
+bool Esp32WebConfig::setConfig(String jsonStr) {
+    JsonDocument doc;
+    jsonStr.trim();
+	DeserializationError err = deserializeJson(doc, jsonStr);
+    if (err) {
+        Serial.println(String("JSON Deserialization Error: ") + err.c_str() );
+        return false;
+    }
+    for (int i = 0; i < configCount; i++) {
+        if (configData[i]->type == VariableType::STRING) {
+            HtmlItem_String* v1 = (HtmlItem_String*)configData[i]; 
+            v1->dataStr = doc[v1->label].as<String>();
+        }
+        if (configData[i]->type == VariableType::IP) {
+            HtmlItem_IpAddr* v1 = (HtmlItem_IpAddr*)configData[i];
+            v1->ip.fromString(doc[v1->label].as<String>());
+        }
+
+        if (configData[i]->type == VariableType::INT) {
+            HtmlItem_Int* v1 = (HtmlItem_Int*)configData[i];
+            v1->dataInt = doc[v1->label];
+        }
+        if (configData[i]->type == VariableType::SELECT) {
+            HtmlItem_Selection* v1 = (HtmlItem_Selection*)configData[i];
+            v1->selectedItem = doc[v1->label];
+        }
+         if (configData[i]->type == VariableType::CHECK_BOX) {
+            HtmlItem_CheckBox* v1 = (HtmlItem_CheckBox*)configData[i]; 
+            v1->checked = doc[v1->label];
+        }
+         
+    }
+
+    writeToPrefs();
+	return true;
+}
 
 void Esp32WebConfig::readFromPrefs() {
     prefs.begin("config");
@@ -94,7 +161,7 @@ void Esp32WebConfig::readFromPrefs() {
         }
          if (configData[i]->type == VariableType::CHECK_BOX) {
             HtmlItem_CheckBox* v1 = (HtmlItem_CheckBox*)configData[i]; 
-            v1->state = prefs.getBool((v1->label).c_str(), v1->defaultVal);
+            v1->checked = prefs.getBool((v1->label).c_str(), v1->defaultVal);
             //Serial.println(v1->label + " " + v1->dataInt);
         }
     }
@@ -103,39 +170,37 @@ void Esp32WebConfig::readFromPrefs() {
 
 void Esp32WebConfig::writeToPrefs() {
     prefs.begin("config");
-    Serial.println(String("write prefs ") );
+    Serial.println(String("write prefs "));
     for (int i = 0; i < configCount; i++) {
         
         if (configData[i]->type == VariableType::STRING) {
             HtmlItem_String* v1 = (HtmlItem_String*)configData[i];
            prefs.putString((v1->label).c_str(), v1->dataStr);
-           //Serial.println(v1->label + " " + v1->dataStr);
+           Serial.println(v1->label + " " + v1->dataStr);
         }
         if (configData[i]->type == VariableType::IP) {
             HtmlItem_IpAddr* v1 = (HtmlItem_IpAddr*)configData[i];
             prefs.putBytes((v1->label).c_str(), &(v1->ip), sizeof(v1->ip));
-            //Serial.println(v1->label + " " + (v1->ip).toString() );
+            Serial.println(v1->label + " " + (v1->ip).toString() );
         }
         if (configData[i]->type == VariableType::INT) {
             HtmlItem_Int* v1 = (HtmlItem_Int*)configData[i];
             prefs.putInt((v1->label).c_str(), v1->dataInt);
-            //Serial.println(v1->label + " " + v1->dataInt);
+            Serial.println(v1->label + " " + v1->dataInt);
         }
         if (configData[i]->type == VariableType::SELECT) {
             HtmlItem_Selection* v1 = (HtmlItem_Selection*)configData[i];
             prefs.putInt((v1->label).c_str(), v1->selectedItem);
-            //Serial.println(v1->label + " " + v1->selectedItem);
+            Serial.println(v1->label + " " + v1->selectedItem);
         }
         if (configData[i]->type == VariableType::CHECK_BOX) {
             HtmlItem_CheckBox* v1 = (HtmlItem_CheckBox*)configData[i]; 
-            prefs.putBool((v1->label).c_str(), v1->state);
-            //Serial.println(v1->label + " " + v1->dataInt);
+            prefs.putBool((v1->label).c_str(), v1->checked);
+            Serial.println(v1->label + " " + v1->checked);
         }
     }
     prefs.end();
 }
-
-
 
 void Esp32WebConfig::startApWebServerBlocking(whileServerRunningCb runWhileBlocking) {
     //while (1) {};
@@ -149,12 +214,14 @@ void Esp32WebConfig::startApWebServerBlocking(whileServerRunningCb runWhileBlock
 
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(local_ip, gateway, subnet);
-    WiFi.softAP("ConfigMe");
+    WiFi.softAP("Esp32Config1");
 
     Serial.print("[+] AP Created with IP Gateway ");
     Serial.println(WiFi.softAPIP());
 
     Esp32WebConfigServer.begin(80);
+
+
 
     Esp32WebConfigServer.on("/", handleRoot);
     Esp32WebConfigServer.on("/update", []() {
@@ -162,27 +229,22 @@ void Esp32WebConfig::startApWebServerBlocking(whileServerRunningCb runWhileBlock
         });
     Esp32WebConfigServer.onNotFound(handleNotFound);
 
+
     while (1) {
         Esp32WebConfigServer.handleClient();
         delay(1);
         if (runWhileBlocking != NULL) runWhileBlocking();
     }
-
 }
 
-void Esp32WebConfig::createHtmlPage(String title, String pageId) {
+String Esp32WebConfig::createHtmlPage(String title, String pageId) {
         htmlPageSource = R"(<html>
             <body>
             <h2>%t</h2>
-            <form action = '/%p'>)";
+            <form id='form1' action = '/%p'>)";
 
 htmlPageSource.replace("%t", title);
 htmlPageSource.replace("%p", pageId);
-
-/*
- <p>update Time: )";
-    htmlPageSource += String(millis()) + "</p>";
-    */
 
     HtmlItemBase::dynUpdataCb();
     
@@ -192,18 +254,21 @@ htmlPageSource.replace("%p", pageId);
         htmlPageSource += p1->getHtmlItemText();
     }
 
-    if (HtmlItemBase::isGrouping) {
+    while (HtmlItemBase::groupingLayers > 0) {
         htmlPageSource += "</fieldset>\n\r";
+        HtmlItemBase::groupingLayers--;
     }
 
-    htmlPageSource += R"(<input type = 'submit' value = 'Submit'>
+    htmlPageSource += R"(<input type = 'submit' value = 'Save Config'>
       </form>
       </body>
       </html>)";
+
+    return htmlPageSource;
 }
 
 void Esp32WebConfig::handleRoot() {
-    Serial.println("pt0");
+    //Serial.println("pt0");
     createHtmlPage( "Configure", "update" );
     Esp32WebConfigServer.send(200, "text/html", htmlPageSource);
     //Serial.println("done");
@@ -222,33 +287,37 @@ void Esp32WebConfig::update() {
                 HtmlItem_String* v1 = (HtmlItem_String*)configData[i];
                 v1->dataStr = (Esp32WebConfigServer.arg(label));
 
-                Serial.println(String("Str: ") + label + " " + v1->dataStr);
+                //Serial.println(String("Str: ") + label + " " + v1->dataStr);
             }
             if (configData[i]->type == VariableType::IP) {
                 HtmlItem_IpAddr* v1 = (HtmlItem_IpAddr*)configData[i];
                 v1->ip.fromString((Esp32WebConfigServer.arg(label)));
-                Serial.println(v1->label + " " + v1->ip.toString());
+                //Serial.println(v1->label + " " + v1->ip.toString());
             }
             if (configData[i]->type == VariableType::INT) {
                 HtmlItem_Int* v1 = (HtmlItem_Int*)configData[i];
                 v1->dataInt = (Esp32WebConfigServer.arg(label)).toInt();
-                Serial.println(String("Int: ") + label + " " + v1->dataInt);
+                //Serial.println(String("Int: ") + label + " " + v1->dataInt);
             }
             if (configData[i]->type == VariableType::SELECT) {
                 HtmlItem_Selection* v1 = (HtmlItem_Selection*)configData[i];
                 v1->selectedItem = v1->getPos(Esp32WebConfigServer.arg(label));
-                Serial.println(v1->label + " " + v1->selectedItem);
+                //Serial.println(v1->label + " " + v1->selectedItem);
             }
             if (configData[i]->type == VariableType::CHECK_BOX) {
                 HtmlItem_CheckBox* v1 = (HtmlItem_CheckBox*)configData[i];
-                v1->state = true;
+                v1->checked = true;
             }
         }
         else {
-            if (configData[i]->type == VariableType::CHECK_BOX) {
-                HtmlItem_CheckBox* v1 = (HtmlItem_CheckBox*)configData[i];
-                v1->state = false;
-            }
+            //the way the checkbox checked is checked is if no value is submitted then we assume it is unchecked
+            //however this get complicated if the checkbox is disabled (in which case it is also not submitted)
+            //Note that the checkbox can also be disabled if the groupbox it is in is disabled in which case
+            //topmostDisabledGroup is != 0
+                if (configData[i]->type == VariableType::CHECK_BOX) {
+                    HtmlItem_CheckBox* v1 = (HtmlItem_CheckBox*)configData[i];
+                    if(!v1->isDisabled && !v1->isInDisabledFieldset ) v1->checked = false;
+                }
         }
     }
 
@@ -260,7 +329,7 @@ void Esp32WebConfig::update() {
     //Serial.println(String("Str3: ") + v1->dataStr);
     handleRoot();
     //Serial.println(String("Str4: ") + v1->dataStr);
-    Serial.println("pt1");
+    //Serial.println("pt1");
 
 }
 
